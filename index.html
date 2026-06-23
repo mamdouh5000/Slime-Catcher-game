@@ -1,0 +1,283 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+const W = 480, H = 600;
+const BUCKET_W = 80, BUCKET_H = 50;
+const SLIME_R = 28;
+const COLORS = ["#7CFC00","#FF69B4","#BF5FFF","#FFD700","#00CFFF","#FF6B35"];
+const MESSAGES = ["Amazing! 🎉","Awesome! ⭐","Great catch! 🌟","Woohoo! 🎊","Super! 💫","Yay! 🥳"];
+
+function randomSlime(speed) {
+  return {
+    id: Math.random(),
+    x: SLIME_R + Math.random() * (W - SLIME_R * 2),
+    y: -SLIME_R,
+    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    speed: speed + Math.random() * 1.5,
+    wobble: Math.random() * Math.PI * 2,
+  };
+}
+
+export default function SlimeCatcher() {
+  const [gameState, setGameState] = useState("idle"); // idle | playing | over
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [slimes, setSlimes] = useState([]);
+  const [bucketX, setBucketX] = useState(W / 2);
+  const [popMessages, setPopMessages] = useState([]);
+  const [shake, setShake] = useState(false);
+  const animRef = useRef();
+  const stateRef = useRef({ score: 0, lives: 3, slimes: [], bucketX: W / 2, tick: 0, spawnTimer: 0 });
+  const gameStateRef = useRef("idle");
+  const keysRef = useRef({ left: false, right: false });
+
+  const triggerShake = () => { setShake(true); setTimeout(() => setShake(false), 400); };
+
+  const addPop = (x, y, msg) => {
+    const id = Math.random();
+    setPopMessages(p => [...p, { id, x, y, msg }]);
+    setTimeout(() => setPopMessages(p => p.filter(m => m.id !== id)), 1000);
+  };
+
+  const startGame = () => {
+    stateRef.current = { score: 0, lives: 3, slimes: [], bucketX: W / 2, tick: 0, spawnTimer: 0 };
+    setScore(0); setLives(3); setSlimes([]); setBucketX(W / 2); setPopMessages([]);
+    gameStateRef.current = "playing";
+    setGameState("playing");
+  };
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.type === "keydown") {
+        if (e.key === "ArrowLeft") keysRef.current.left = true;
+        if (e.key === "ArrowRight") keysRef.current.right = true;
+      } else {
+        if (e.key === "ArrowLeft") keysRef.current.left = false;
+        if (e.key === "ArrowRight") keysRef.current.right = false;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKey); };
+  }, []);
+
+  useEffect(() => {
+    if (gameState !== "playing") return;
+
+    const loop = () => {
+      const s = stateRef.current;
+      s.tick++;
+
+      // Move bucket
+      const spd = 6;
+      if (keysRef.current.left) s.bucketX = Math.max(BUCKET_W / 2, s.bucketX - spd);
+      if (keysRef.current.right) s.bucketX = Math.min(W - BUCKET_W / 2, s.bucketX + spd);
+
+      // Spawn slimes
+      const baseSpeed = 2 + Math.floor(s.score / 10) * 0.4;
+      const spawnRate = Math.max(40, 90 - Math.floor(s.score / 5) * 5);
+      s.spawnTimer++;
+      if (s.spawnTimer >= spawnRate) {
+        s.slimes.push(randomSlime(baseSpeed));
+        s.spawnTimer = 0;
+      }
+
+      // Move slimes
+      s.slimes = s.slimes.map(sl => ({ ...sl, y: sl.y + sl.speed, wobble: sl.wobble + 0.08 }));
+
+      // Check catches & misses
+      const caught = [], missed = [];
+      s.slimes.forEach(sl => {
+        const bLeft = s.bucketX - BUCKET_W / 2;
+        const bRight = s.bucketX + BUCKET_W / 2;
+        const bTop = H - BUCKET_H - 10;
+        if (sl.y + SLIME_R >= bTop && sl.y - SLIME_R <= bTop + BUCKET_H &&
+          sl.x >= bLeft && sl.x <= bRight) {
+          caught.push(sl);
+        } else if (sl.y - SLIME_R > H) {
+          missed.push(sl);
+        }
+      });
+
+      caught.forEach(sl => {
+        s.score++;
+        const msg = MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
+        addPop(sl.x, H - BUCKET_H - 40, msg);
+      });
+
+      if (missed.length > 0) {
+        s.lives -= missed.length;
+        triggerShake();
+        if (s.lives <= 0) {
+          s.lives = 0;
+          gameStateRef.current = "over";
+          setScore(s.score); setLives(0); setSlimes([]);
+          setGameState("over");
+          return;
+        }
+      }
+
+      s.slimes = s.slimes.filter(sl => !caught.includes(sl) && !missed.includes(sl));
+
+      setScore(s.score);
+      setLives(s.lives);
+      setSlimes([...s.slimes]);
+      setBucketX(s.bucketX);
+
+      animRef.current = requestAnimationFrame(loop);
+    };
+
+    animRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [gameState]);
+
+  // Touch / mouse drag
+  const handlePointerMove = (e) => {
+    if (gameStateRef.current !== "playing") return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const x = ((clientX - rect.left) / rect.width) * W;
+    stateRef.current.bucketX = Math.max(BUCKET_W / 2, Math.min(W - BUCKET_W / 2, x));
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      minHeight: "100vh", background: "linear-gradient(135deg,#1a0030 0%,#0d0020 100%)", userSelect: "none" }}>
+
+      {/* HUD */}
+      {gameState === "playing" && (
+        <div style={{ display: "flex", gap: 32, marginBottom: 10, fontSize: 22, fontWeight: "bold", color: "#fff", fontFamily: "Comic Sans MS, cursive" }}>
+          <span>⭐ {score}</span>
+          <span>{"❤️".repeat(Math.max(0, lives))}{"🖤".repeat(Math.max(0, 3 - lives))}</span>
+        </div>
+      )}
+
+      {/* Game Canvas */}
+      <div
+        style={{
+          position: "relative", width: W, height: H,
+          background: "linear-gradient(180deg,#1a0050 0%,#2d0060 60%,#1a0030 100%)",
+          borderRadius: 24, overflow: "hidden", boxShadow: "0 0 60px #bf5fff88",
+          animation: shake ? "shake 0.4s" : "none",
+          cursor: gameState === "playing" ? "none" : "default",
+          border: "3px solid #bf5fff",
+        }}
+        onMouseMove={handlePointerMove}
+        onTouchMove={handlePointerMove}
+      >
+        <style>{`
+          @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-8px)} 40%{transform:translateX(8px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
+          @keyframes floatUp { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-50px)} }
+          @keyframes bounce { 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(0.85)} }
+        `}</style>
+
+        {/* Stars */}
+        {Array.from({length:20}).map((_,i) => (
+          <div key={i} style={{
+            position:"absolute", borderRadius:"50%", background:"#fff",
+            width: i%3===0?3:2, height: i%3===0?3:2,
+            left:`${(i*47+13)%100}%`, top:`${(i*31+7)%70}%`, opacity: 0.4+((i*0.07)%0.5)
+          }}/>
+        ))}
+
+        {/* Slimes */}
+        {slimes.map(sl => (
+          <svg key={sl.id} style={{ position:"absolute", left: sl.x - SLIME_R, top: sl.y - SLIME_R, overflow:"visible" }}
+            width={SLIME_R*2} height={SLIME_R*2}>
+            <ellipse
+              cx={SLIME_R} cy={SLIME_R + Math.sin(sl.wobble)*4}
+              rx={SLIME_R + Math.sin(sl.wobble)*3} ry={SLIME_R - Math.abs(Math.sin(sl.wobble))*3}
+              fill={sl.color} opacity={0.92}
+            />
+            {/* Eyes */}
+            <circle cx={SLIME_R-8} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={5} fill="#fff"/>
+            <circle cx={SLIME_R+8} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={5} fill="#fff"/>
+            <circle cx={SLIME_R-7} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={2.5} fill="#222"/>
+            <circle cx={SLIME_R+9} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={2.5} fill="#222"/>
+            {/* Smile */}
+            <path d={`M${SLIME_R-6} ${SLIME_R+6+Math.sin(sl.wobble)*4} Q${SLIME_R} ${SLIME_R+13+Math.sin(sl.wobble)*4} ${SLIME_R+6} ${SLIME_R+6+Math.sin(sl.wobble)*4}`}
+              stroke="#222" strokeWidth={2} fill="none" strokeLinecap="round"/>
+          </svg>
+        ))}
+
+        {/* Bucket */}
+        {gameState === "playing" && (
+          <svg style={{ position:"absolute", left: bucketX - BUCKET_W/2, top: H - BUCKET_H - 10 }}
+            width={BUCKET_W} height={BUCKET_H}>
+            {/* Bucket body */}
+            <path d="M5,5 L75,5 L68,48 L12,48 Z" fill="#c084fc" stroke="#7c3aed" strokeWidth={3} strokeLinejoin="round"/>
+            {/* Slime drips inside */}
+            <ellipse cx={40} cy={18} rx={22} ry={8} fill="#a855f7" opacity={0.5}/>
+            {/* Handle */}
+            <path d="M15,5 Q40,-10 65,5" fill="none" stroke="#7c3aed" strokeWidth={3} strokeLinecap="round"/>
+            {/* Shine */}
+            <line x1={18} y1={10} x2={14} y2={40} stroke="#fff" strokeWidth={2} opacity={0.3} strokeLinecap="round"/>
+          </svg>
+        )}
+
+        {/* Pop messages */}
+        {popMessages.map(m => (
+          <div key={m.id} style={{
+            position:"absolute", left: m.x, top: m.y, transform:"translateX(-50%)",
+            fontFamily:"Comic Sans MS, cursive", fontWeight:"bold", fontSize:20,
+            color:"#FFD700", textShadow:"0 0 8px #fff",
+            animation:"floatUp 1s ease-out forwards", pointerEvents:"none", whiteSpace:"nowrap"
+          }}>{m.msg}</div>
+        ))}
+
+        {/* Idle Screen */}
+        {gameState === "idle" && (
+          <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
+            alignItems:"center", justifyContent:"center", gap:20 }}>
+            <div style={{ fontSize:72 }}>🟢</div>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:36, fontWeight:"bold",
+              color:"#7CFC00", textShadow:"0 0 20px #7CFC00" }}>Slime Catcher!</div>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:16, color:"#ddd", textAlign:"center", padding:"0 30px" }}>
+              Move the bucket to catch falling slimes!<br/>Don't let them hit the ground! 🪣
+            </div>
+            <button onClick={startGame} style={{
+              marginTop:10, padding:"14px 40px", fontSize:22, fontFamily:"Comic Sans MS, cursive",
+              fontWeight:"bold", background:"linear-gradient(135deg,#7CFC00,#00CFFF)",
+              border:"none", borderRadius:50, cursor:"pointer", color:"#1a0030",
+              boxShadow:"0 4px 20px #7CFC0088", transform:"scale(1)", transition:"transform 0.1s"
+            }} onMouseEnter={e=>e.target.style.transform="scale(1.07)"} onMouseLeave={e=>e.target.style.transform="scale(1)"}>
+              ▶ Play!
+            </button>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:13, color:"#aaa" }}>
+              ← → Arrow keys or move your mouse / finger
+            </div>
+          </div>
+        )}
+
+        {/* Game Over Screen */}
+        {gameState === "over" && (
+          <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
+            alignItems:"center", justifyContent:"center", gap:16,
+            background:"rgba(0,0,0,0.7)", borderRadius:24 }}>
+            <div style={{ fontSize:64 }}>😢</div>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:30, fontWeight:"bold", color:"#FF69B4" }}>
+              Game Over!
+            </div>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:22, color:"#FFD700" }}>
+              ⭐ Score: {score}
+            </div>
+            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:score>=20?"22px":"16px", color:"#7CFC00", textAlign:"center" }}>
+              {score >= 30 ? "🏆 Incredible! You're a Slime Master!" : score >= 20 ? "🎉 Amazing job! So talented!" : score >= 10 ? "🌟 Great try! You're getting better!" : "💪 Keep trying! You can do it!"}
+            </div>
+            <button onClick={startGame} style={{
+              marginTop:8, padding:"12px 36px", fontSize:20, fontFamily:"Comic Sans MS, cursive",
+              fontWeight:"bold", background:"linear-gradient(135deg,#FF69B4,#BF5FFF)",
+              border:"none", borderRadius:50, cursor:"pointer", color:"#fff",
+              boxShadow:"0 4px 20px #FF69B488"
+            }}>
+              🔄 Play Again!
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop:14, fontFamily:"Comic Sans MS, cursive", fontSize:13, color:"#bf5fff", opacity:0.7 }}>
+        Move mouse / finger over the game to control the bucket
+      </div>
+    </div>
+  );
+}
