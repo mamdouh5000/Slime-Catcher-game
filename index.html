@@ -1,283 +1,249 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Slime Catcher 🟢</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background: linear-gradient(135deg,#1a0030,#0d0020); min-height:100vh;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-family: 'Comic Sans MS', cursive; overflow:hidden; }
+  canvas { border-radius:24px; border:3px solid #bf5fff;
+    box-shadow:0 0 60px #bf5fff88; display:block; touch-action:none; }
+  #hud { color:#fff; font-size:22px; font-weight:bold; margin-bottom:10px;
+    display:flex; gap:32px; }
+  #hint { color:#bf5fff; font-size:13px; margin-top:12px; opacity:0.7; }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<canvas id="c" width="480" height="600"></canvas>
+<div id="hint">Move mouse / finger over the game to control the bucket</div>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+const hud = document.getElementById('hud');
+const W=480,H=600,BW=80,BH=50,SR=28;
+const COLORS=["#7CFC00","#FF69B4","#BF5FFF","#FFD700","#00CFFF","#FF6B35"];
+const MSGS=["Amazing! 🎉","Awesome! ⭐","Great catch! 🌟","Woohoo! 🎊","Super! 💫","Yay! 🥳"];
 
-const W = 480, H = 600;
-const BUCKET_W = 80, BUCKET_H = 50;
-const SLIME_R = 28;
-const COLORS = ["#7CFC00","#FF69B4","#BF5FFF","#FFD700","#00CFFF","#FF6B35"];
-const MESSAGES = ["Amazing! 🎉","Awesome! ⭐","Great catch! 🌟","Woohoo! 🎊","Super! 💫","Yay! 🥳"];
+let state='idle', score=0, lives=3, slimes=[], bucketX=W/2;
+let tick=0, spawnTimer=0, pops=[], shakeEnd=0;
+const keys={left:false,right:false};
 
-function randomSlime(speed) {
-  return {
-    id: Math.random(),
-    x: SLIME_R + Math.random() * (W - SLIME_R * 2),
-    y: -SLIME_R,
-    color: COLORS[Math.floor(Math.random() * COLORS.length)],
-    speed: speed + Math.random() * 1.5,
-    wobble: Math.random() * Math.PI * 2,
-  };
+function rndSlime(){
+  const spd = 2 + Math.floor(score/10)*0.4 + Math.random()*1.5;
+  return { x: SR+Math.random()*(W-SR*2), y:-SR,
+    color:COLORS[Math.floor(Math.random()*COLORS.length)],
+    speed:spd, w:Math.random()*Math.PI*2 };
 }
 
-export default function SlimeCatcher() {
-  const [gameState, setGameState] = useState("idle"); // idle | playing | over
-  const [score, setScore] = useState(0);
-  const [lives, setLives] = useState(3);
-  const [slimes, setSlimes] = useState([]);
-  const [bucketX, setBucketX] = useState(W / 2);
-  const [popMessages, setPopMessages] = useState([]);
-  const [shake, setShake] = useState(false);
-  const animRef = useRef();
-  const stateRef = useRef({ score: 0, lives: 3, slimes: [], bucketX: W / 2, tick: 0, spawnTimer: 0 });
-  const gameStateRef = useRef("idle");
-  const keysRef = useRef({ left: false, right: false });
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft') keys.left=true;
+  if(e.key==='ArrowRight') keys.right=true;
+});
+document.addEventListener('keyup',e=>{
+  if(e.key==='ArrowLeft') keys.left=false;
+  if(e.key==='ArrowRight') keys.right=false;
+});
 
-  const triggerShake = () => { setShake(true); setTimeout(() => setShake(false), 400); };
+c.addEventListener('mousemove',e=>{
+  if(state!=='playing') return;
+  const r=c.getBoundingClientRect();
+  bucketX=Math.max(BW/2,Math.min(W-BW/2,((e.clientX-r.left)/r.width)*W));
+});
+c.addEventListener('touchmove',e=>{
+  if(state!=='playing') return;
+  e.preventDefault();
+  const r=c.getBoundingClientRect();
+  bucketX=Math.max(BW/2,Math.min(W-BW/2,((e.touches[0].clientX-r.left)/r.width)*W));
+},{passive:false});
+c.addEventListener('click',()=>{ if(state!=='playing') startGame(); });
 
-  const addPop = (x, y, msg) => {
-    const id = Math.random();
-    setPopMessages(p => [...p, { id, x, y, msg }]);
-    setTimeout(() => setPopMessages(p => p.filter(m => m.id !== id)), 1000);
-  };
-
-  const startGame = () => {
-    stateRef.current = { score: 0, lives: 3, slimes: [], bucketX: W / 2, tick: 0, spawnTimer: 0 };
-    setScore(0); setLives(3); setSlimes([]); setBucketX(W / 2); setPopMessages([]);
-    gameStateRef.current = "playing";
-    setGameState("playing");
-  };
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.type === "keydown") {
-        if (e.key === "ArrowLeft") keysRef.current.left = true;
-        if (e.key === "ArrowRight") keysRef.current.right = true;
-      } else {
-        if (e.key === "ArrowLeft") keysRef.current.left = false;
-        if (e.key === "ArrowRight") keysRef.current.right = false;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("keyup", onKey);
-    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKey); };
-  }, []);
-
-  useEffect(() => {
-    if (gameState !== "playing") return;
-
-    const loop = () => {
-      const s = stateRef.current;
-      s.tick++;
-
-      // Move bucket
-      const spd = 6;
-      if (keysRef.current.left) s.bucketX = Math.max(BUCKET_W / 2, s.bucketX - spd);
-      if (keysRef.current.right) s.bucketX = Math.min(W - BUCKET_W / 2, s.bucketX + spd);
-
-      // Spawn slimes
-      const baseSpeed = 2 + Math.floor(s.score / 10) * 0.4;
-      const spawnRate = Math.max(40, 90 - Math.floor(s.score / 5) * 5);
-      s.spawnTimer++;
-      if (s.spawnTimer >= spawnRate) {
-        s.slimes.push(randomSlime(baseSpeed));
-        s.spawnTimer = 0;
-      }
-
-      // Move slimes
-      s.slimes = s.slimes.map(sl => ({ ...sl, y: sl.y + sl.speed, wobble: sl.wobble + 0.08 }));
-
-      // Check catches & misses
-      const caught = [], missed = [];
-      s.slimes.forEach(sl => {
-        const bLeft = s.bucketX - BUCKET_W / 2;
-        const bRight = s.bucketX + BUCKET_W / 2;
-        const bTop = H - BUCKET_H - 10;
-        if (sl.y + SLIME_R >= bTop && sl.y - SLIME_R <= bTop + BUCKET_H &&
-          sl.x >= bLeft && sl.x <= bRight) {
-          caught.push(sl);
-        } else if (sl.y - SLIME_R > H) {
-          missed.push(sl);
-        }
-      });
-
-      caught.forEach(sl => {
-        s.score++;
-        const msg = MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
-        addPop(sl.x, H - BUCKET_H - 40, msg);
-      });
-
-      if (missed.length > 0) {
-        s.lives -= missed.length;
-        triggerShake();
-        if (s.lives <= 0) {
-          s.lives = 0;
-          gameStateRef.current = "over";
-          setScore(s.score); setLives(0); setSlimes([]);
-          setGameState("over");
-          return;
-        }
-      }
-
-      s.slimes = s.slimes.filter(sl => !caught.includes(sl) && !missed.includes(sl));
-
-      setScore(s.score);
-      setLives(s.lives);
-      setSlimes([...s.slimes]);
-      setBucketX(s.bucketX);
-
-      animRef.current = requestAnimationFrame(loop);
-    };
-
-    animRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [gameState]);
-
-  // Touch / mouse drag
-  const handlePointerMove = (e) => {
-    if (gameStateRef.current !== "playing") return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const x = ((clientX - rect.left) / rect.width) * W;
-    stateRef.current.bucketX = Math.max(BUCKET_W / 2, Math.min(W - BUCKET_W / 2, x));
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-      minHeight: "100vh", background: "linear-gradient(135deg,#1a0030 0%,#0d0020 100%)", userSelect: "none" }}>
-
-      {/* HUD */}
-      {gameState === "playing" && (
-        <div style={{ display: "flex", gap: 32, marginBottom: 10, fontSize: 22, fontWeight: "bold", color: "#fff", fontFamily: "Comic Sans MS, cursive" }}>
-          <span>⭐ {score}</span>
-          <span>{"❤️".repeat(Math.max(0, lives))}{"🖤".repeat(Math.max(0, 3 - lives))}</span>
-        </div>
-      )}
-
-      {/* Game Canvas */}
-      <div
-        style={{
-          position: "relative", width: W, height: H,
-          background: "linear-gradient(180deg,#1a0050 0%,#2d0060 60%,#1a0030 100%)",
-          borderRadius: 24, overflow: "hidden", boxShadow: "0 0 60px #bf5fff88",
-          animation: shake ? "shake 0.4s" : "none",
-          cursor: gameState === "playing" ? "none" : "default",
-          border: "3px solid #bf5fff",
-        }}
-        onMouseMove={handlePointerMove}
-        onTouchMove={handlePointerMove}
-      >
-        <style>{`
-          @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-8px)} 40%{transform:translateX(8px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
-          @keyframes floatUp { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-50px)} }
-          @keyframes bounce { 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(0.85)} }
-        `}</style>
-
-        {/* Stars */}
-        {Array.from({length:20}).map((_,i) => (
-          <div key={i} style={{
-            position:"absolute", borderRadius:"50%", background:"#fff",
-            width: i%3===0?3:2, height: i%3===0?3:2,
-            left:`${(i*47+13)%100}%`, top:`${(i*31+7)%70}%`, opacity: 0.4+((i*0.07)%0.5)
-          }}/>
-        ))}
-
-        {/* Slimes */}
-        {slimes.map(sl => (
-          <svg key={sl.id} style={{ position:"absolute", left: sl.x - SLIME_R, top: sl.y - SLIME_R, overflow:"visible" }}
-            width={SLIME_R*2} height={SLIME_R*2}>
-            <ellipse
-              cx={SLIME_R} cy={SLIME_R + Math.sin(sl.wobble)*4}
-              rx={SLIME_R + Math.sin(sl.wobble)*3} ry={SLIME_R - Math.abs(Math.sin(sl.wobble))*3}
-              fill={sl.color} opacity={0.92}
-            />
-            {/* Eyes */}
-            <circle cx={SLIME_R-8} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={5} fill="#fff"/>
-            <circle cx={SLIME_R+8} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={5} fill="#fff"/>
-            <circle cx={SLIME_R-7} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={2.5} fill="#222"/>
-            <circle cx={SLIME_R+9} cy={SLIME_R-4+Math.sin(sl.wobble)*4} r={2.5} fill="#222"/>
-            {/* Smile */}
-            <path d={`M${SLIME_R-6} ${SLIME_R+6+Math.sin(sl.wobble)*4} Q${SLIME_R} ${SLIME_R+13+Math.sin(sl.wobble)*4} ${SLIME_R+6} ${SLIME_R+6+Math.sin(sl.wobble)*4}`}
-              stroke="#222" strokeWidth={2} fill="none" strokeLinecap="round"/>
-          </svg>
-        ))}
-
-        {/* Bucket */}
-        {gameState === "playing" && (
-          <svg style={{ position:"absolute", left: bucketX - BUCKET_W/2, top: H - BUCKET_H - 10 }}
-            width={BUCKET_W} height={BUCKET_H}>
-            {/* Bucket body */}
-            <path d="M5,5 L75,5 L68,48 L12,48 Z" fill="#c084fc" stroke="#7c3aed" strokeWidth={3} strokeLinejoin="round"/>
-            {/* Slime drips inside */}
-            <ellipse cx={40} cy={18} rx={22} ry={8} fill="#a855f7" opacity={0.5}/>
-            {/* Handle */}
-            <path d="M15,5 Q40,-10 65,5" fill="none" stroke="#7c3aed" strokeWidth={3} strokeLinecap="round"/>
-            {/* Shine */}
-            <line x1={18} y1={10} x2={14} y2={40} stroke="#fff" strokeWidth={2} opacity={0.3} strokeLinecap="round"/>
-          </svg>
-        )}
-
-        {/* Pop messages */}
-        {popMessages.map(m => (
-          <div key={m.id} style={{
-            position:"absolute", left: m.x, top: m.y, transform:"translateX(-50%)",
-            fontFamily:"Comic Sans MS, cursive", fontWeight:"bold", fontSize:20,
-            color:"#FFD700", textShadow:"0 0 8px #fff",
-            animation:"floatUp 1s ease-out forwards", pointerEvents:"none", whiteSpace:"nowrap"
-          }}>{m.msg}</div>
-        ))}
-
-        {/* Idle Screen */}
-        {gameState === "idle" && (
-          <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
-            alignItems:"center", justifyContent:"center", gap:20 }}>
-            <div style={{ fontSize:72 }}>🟢</div>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:36, fontWeight:"bold",
-              color:"#7CFC00", textShadow:"0 0 20px #7CFC00" }}>Slime Catcher!</div>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:16, color:"#ddd", textAlign:"center", padding:"0 30px" }}>
-              Move the bucket to catch falling slimes!<br/>Don't let them hit the ground! 🪣
-            </div>
-            <button onClick={startGame} style={{
-              marginTop:10, padding:"14px 40px", fontSize:22, fontFamily:"Comic Sans MS, cursive",
-              fontWeight:"bold", background:"linear-gradient(135deg,#7CFC00,#00CFFF)",
-              border:"none", borderRadius:50, cursor:"pointer", color:"#1a0030",
-              boxShadow:"0 4px 20px #7CFC0088", transform:"scale(1)", transition:"transform 0.1s"
-            }} onMouseEnter={e=>e.target.style.transform="scale(1.07)"} onMouseLeave={e=>e.target.style.transform="scale(1)"}>
-              ▶ Play!
-            </button>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:13, color:"#aaa" }}>
-              ← → Arrow keys or move your mouse / finger
-            </div>
-          </div>
-        )}
-
-        {/* Game Over Screen */}
-        {gameState === "over" && (
-          <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
-            alignItems:"center", justifyContent:"center", gap:16,
-            background:"rgba(0,0,0,0.7)", borderRadius:24 }}>
-            <div style={{ fontSize:64 }}>😢</div>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:30, fontWeight:"bold", color:"#FF69B4" }}>
-              Game Over!
-            </div>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:22, color:"#FFD700" }}>
-              ⭐ Score: {score}
-            </div>
-            <div style={{ fontFamily:"Comic Sans MS, cursive", fontSize:score>=20?"22px":"16px", color:"#7CFC00", textAlign:"center" }}>
-              {score >= 30 ? "🏆 Incredible! You're a Slime Master!" : score >= 20 ? "🎉 Amazing job! So talented!" : score >= 10 ? "🌟 Great try! You're getting better!" : "💪 Keep trying! You can do it!"}
-            </div>
-            <button onClick={startGame} style={{
-              marginTop:8, padding:"12px 36px", fontSize:20, fontFamily:"Comic Sans MS, cursive",
-              fontWeight:"bold", background:"linear-gradient(135deg,#FF69B4,#BF5FFF)",
-              border:"none", borderRadius:50, cursor:"pointer", color:"#fff",
-              boxShadow:"0 4px 20px #FF69B488"
-            }}>
-              🔄 Play Again!
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div style={{ marginTop:14, fontFamily:"Comic Sans MS, cursive", fontSize:13, color:"#bf5fff", opacity:0.7 }}>
-        Move mouse / finger over the game to control the bucket
-      </div>
-    </div>
-  );
+function startGame(){
+  score=0; lives=3; slimes=[]; bucketX=W/2; tick=0; spawnTimer=0; pops=[];
+  state='playing';
 }
+
+function drawSlime(sl){
+  const wx=Math.sin(sl.w)*3, wy=Math.abs(Math.sin(sl.w))*3;
+  ctx.save();
+  ctx.translate(sl.x, sl.y);
+  // body
+  ctx.beginPath();
+  ctx.ellipse(0,Math.sin(sl.w)*4, SR+wx, SR-wy, 0, 0, Math.PI*2);
+  ctx.fillStyle=sl.color;
+  ctx.globalAlpha=0.92;
+  ctx.fill();
+  ctx.globalAlpha=1;
+  // eyes white
+  const ey = Math.sin(sl.w)*4 - 4;
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(-8,ey,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(8,ey,5,0,Math.PI*2); ctx.fill();
+  // pupils
+  ctx.fillStyle='#222';
+  ctx.beginPath(); ctx.arc(-7,ey,2.5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(9,ey,2.5,0,Math.PI*2); ctx.fill();
+  // smile
+  ctx.beginPath();
+  ctx.moveTo(-6, ey+10);
+  ctx.quadraticCurveTo(0, ey+17, 6, ey+10);
+  ctx.strokeStyle='#222'; ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke();
+  ctx.restore();
+}
+
+function drawBucket(){
+  ctx.save();
+  ctx.translate(bucketX-BW/2, H-BH-10);
+  // body trapezoid
+  ctx.beginPath();
+  ctx.moveTo(5,5); ctx.lineTo(75,5); ctx.lineTo(68,48); ctx.lineTo(12,48);
+  ctx.closePath();
+  ctx.fillStyle='#c084fc'; ctx.fill();
+  ctx.strokeStyle='#7c3aed'; ctx.lineWidth=3; ctx.lineJoin='round'; ctx.stroke();
+  // inner shine
+  ctx.globalAlpha=0.5;
+  ctx.fillStyle='#a855f7';
+  ctx.beginPath(); ctx.ellipse(40,18,22,8,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  // handle
+  ctx.beginPath(); ctx.moveTo(15,5); ctx.quadraticCurveTo(40,-10,65,5);
+  ctx.strokeStyle='#7c3aed'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.stroke();
+  ctx.restore();
+}
+
+function drawStars(){
+  for(let i=0;i<20;i++){
+    const x=((i*47+13)%100)/100*W, y=((i*31+7)%70)/100*H;
+    const r=i%3===0?1.5:1;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(255,255,255,${0.4+(i*0.07)%0.5})`; ctx.fill();
+  }
+}
+
+function drawScreen(){
+  if(state==='idle'){
+    ctx.fillStyle='#7CFC00';
+    ctx.font='bold 36px Comic Sans MS';
+    ctx.textAlign='center';
+    ctx.shadowColor='#7CFC00'; ctx.shadowBlur=20;
+    ctx.fillText('Slime Catcher! 🟢', W/2, 220);
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#ddd'; ctx.font='16px Comic Sans MS';
+    ctx.fillText('Move bucket to catch falling slimes!', W/2, 270);
+    ctx.fillText("Don't let them hit the ground! 🪣", W/2, 295);
+    // button
+    const grd=ctx.createLinearGradient(W/2-70,330,W/2+70,370);
+    grd.addColorStop(0,'#7CFC00'); grd.addColorStop(1,'#00CFFF');
+    ctx.fillStyle=grd;
+    roundRect(ctx, W/2-80, 330, 160, 50, 25); ctx.fill();
+    ctx.fillStyle='#1a0030'; ctx.font='bold 22px Comic Sans MS';
+    ctx.fillText('▶ Play!', W/2, 362);
+    ctx.fillStyle='#aaa'; ctx.font='13px Comic Sans MS';
+    ctx.fillText('← → Arrow keys or move mouse/finger', W/2, 420);
+  }
+  if(state==='over'){
+    ctx.fillStyle='rgba(0,0,0,0.75)';
+    roundRect(ctx,W/2-160,H/2-170,320,300,20); ctx.fill();
+    ctx.font='64px serif'; ctx.textAlign='center';
+    ctx.fillText('😢', W/2, H/2-90);
+    ctx.fillStyle='#FF69B4'; ctx.font='bold 30px Comic Sans MS';
+    ctx.fillText('Game Over!', W/2, H/2-40);
+    ctx.fillStyle='#FFD700'; ctx.font='22px Comic Sans MS';
+    ctx.fillText('⭐ Score: '+score, W/2, H/2);
+    ctx.fillStyle='#7CFC00'; ctx.font='18px Comic Sans MS';
+    const msg = score>=30?'🏆 Incredible! Slime Master!':score>=20?'🎉 Amazing job!':score>=10?'🌟 Great try!':'💪 Keep trying!';
+    ctx.fillText(msg, W/2, H/2+35);
+    const grd=ctx.createLinearGradient(W/2-70,H/2+60,W/2+70,H/2+100);
+    grd.addColorStop(0,'#FF69B4'); grd.addColorStop(1,'#BF5FFF');
+    ctx.fillStyle=grd;
+    roundRect(ctx,W/2-90,H/2+60,180,48,24); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 20px Comic Sans MS';
+    ctx.fillText('🔄 Play Again!', W/2, H/2+90);
+  }
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+}
+
+c.addEventListener('click',e=>{
+  if(state==='over'){
+    const r=c.getBoundingClientRect();
+    const mx=((e.clientX-r.left)/r.width)*W;
+    const my=((e.clientY-r.top)/r.height)*H;
+    if(mx>W/2-90&&mx<W/2+90&&my>H/2+60&&my<H/2+108) startGame();
+  }
+});
+
+function loop(){
+  tick++;
+  // move bucket
+  if(keys.left) bucketX=Math.max(BW/2,bucketX-6);
+  if(keys.right) bucketX=Math.min(W-BW/2,bucketX+6);
+
+  if(state==='playing'){
+    // spawn
+    const spawnRate=Math.max(40,90-Math.floor(score/5)*5);
+    spawnTimer++;
+    if(spawnTimer>=spawnRate){ slimes.push(rndSlime()); spawnTimer=0; }
+    // move
+    slimes.forEach(sl=>{ sl.y+=sl.speed; sl.w+=0.08; });
+    // catch/miss
+    const bL=bucketX-BW/2, bR=bucketX+BW/2, bT=H-BH-10;
+    const caught=[], missed=[];
+    slimes.forEach(sl=>{
+      if(sl.y+SR>=bT&&sl.y-SR<=bT+BH&&sl.x>=bL&&sl.x<=bR) caught.push(sl);
+      else if(sl.y-SR>H) missed.push(sl);
+    });
+    caught.forEach(sl=>{
+      score++;
+      pops.push({x:sl.x,y:H-BH-40,msg:MSGS[Math.floor(Math.random()*MSGS.length)],t:60});
+    });
+    if(missed.length){ lives-=missed.length; shakeEnd=tick+25; }
+    if(lives<=0){ lives=0; state='over'; }
+    slimes=slimes.filter(sl=>!caught.includes(sl)&&!missed.includes(sl));
+    pops=pops.filter(p=>p.t-->0);
+  }
+
+  // draw bg
+  const shake = tick<shakeEnd ? (Math.random()-0.5)*8 : 0;
+  ctx.save();
+  ctx.translate(shake,0);
+  const bg=ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#1a0050'); bg.addColorStop(0.6,'#2d0060'); bg.addColorStop(1,'#1a0030');
+  ctx.fillStyle=bg; roundRect(ctx,0,0,W,H,24); ctx.fill();
+  drawStars();
+  slimes.forEach(drawSlime);
+  if(state==='playing') drawBucket();
+  // pops
+  pops.forEach(p=>{
+    ctx.globalAlpha=p.t/60;
+    ctx.fillStyle='#FFD700'; ctx.font='bold 20px Comic Sans MS';
+    ctx.textAlign='center';
+    ctx.shadowColor='#fff'; ctx.shadowBlur=8;
+    ctx.fillText(p.msg, p.x, p.y-(60-p.t)*0.8);
+    ctx.shadowBlur=0; ctx.globalAlpha=1;
+  });
+  drawScreen();
+  ctx.restore();
+
+  // hud
+  if(state==='playing'){
+    hud.innerHTML=`<span>⭐ ${score}</span><span>${'❤️'.repeat(Math.max(0,lives))}${'🖤'.repeat(Math.max(0,3-lives))}</span>`;
+  } else { hud.innerHTML=''; }
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
